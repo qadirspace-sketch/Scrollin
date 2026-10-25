@@ -14,63 +14,63 @@ const PostTagOverlay = ({ primaryTag, secondaryTag, confidence, source, topTopic
         gap: '4px',
         boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
         zIndex: 10,
-        backgroundColor: '#FFFFFF',
-        border: '1px solid #E5E5E5',
+        backgroundColor: '#fff',
+        border: '1px solid #e0e0e0',
     };
 
     // ... (Map logic is unchanged, just referenced) ...
     const primaryColorMap = {
-        "Career Advice": "#F4F4F4", // Blue
+        "Career Advice": "#E3F2FD", // Blue
         "Personal Story": "#F3E5F5", // Purple
         "Opinion / Take": "#FFF3E0", // Orange
-        "LinkedIn Platform": "#F4F4F4", // Indigo
+        "LinkedIn Platform": "#E8EAF6", // Indigo
         "Leadership": "#E0F2F1", // Teal
         "Marketing": "#FBE9E7", // Deep Orange
         "Hiring": "#F1F8E9", // Light Green
         "Productivity": "#FFF8E1", // Amber
-        "Startup": "#F4F4F4", // Blue Gray
-        "Software Engineering": "#F4F4F4", // Light Blue
+        "Startup": "#ECEFF1", // Blue Gray
+        "Software Engineering": "#E1F5FE", // Light Blue
         "Web Development": "#E0F7FA", // Cyan/Teal
         "AI / Tech": "#E0F7FA", // Cyan
         "Design / UX": "#FCE4EC", // Pink
         "Mental Health": "#F3E5F5", // Light Purple
-        "Work Culture": "#FFFFFF", // Gray/White
+        "Work Culture": "#FAFAFA", // Gray/White
         "Motivation": "#FFFDE7", // Light Yellow
         "Content Creation": "#F3E5F5", // Lavender
         "Finance / Investing": "#E8F5E9", // Green
         "Sales": "#FFEBEE", // Red
         "Freelancing": "#FBE9E7", // Peach
         "Cybersecurity": "#FFEBEE", // Pale Red
-        "General": "#FFFFFF"
+        "General": "#F5F5F5"
     };
 
     const textColorMap = {
-        "Career Advice": "#111111",
+        "Career Advice": "#1565C0",
         "Personal Story": "#7B1FA2",
         "Opinion / Take": "#E65100",
-        "LinkedIn Platform": "#111111",
+        "LinkedIn Platform": "#283593",
         "Leadership": "#00695C",
         "Marketing": "#D84315",
         "Hiring": "#33691E",
         "Productivity": "#FF8F00",
-        "Startup": "#333333",
-        "Software Engineering": "#111111",
+        "Startup": "#37474F",
+        "Software Engineering": "#0277BD",
         "Web Development": "#006064",
         "AI / Tech": "#006064",
         "Design / UX": "#C2185B",
         "Mental Health": "#7B1FA2",
-        "Work Culture": "#333333",
+        "Work Culture": "#424242",
         "Motivation": "#FBC02D",
         "Content Creation": "#8E24AA",
         "Finance / Investing": "#2E7D32",
         "Sales": "#C62828",
         "Freelancing": "#D84315",
         "Cybersecurity": "#B71C1C",
-        "General": "#6B6B6B"
+        "General": "#616161"
     }
 
-    const bg = primaryColorMap[primaryTag] || "#FFFFFF";
-    const color = textColorMap[primaryTag] || "#333333";
+    const bg = primaryColorMap[primaryTag] || "#fff";
+    const color = textColorMap[primaryTag] || "#333";
 
     return (
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
@@ -83,7 +83,7 @@ const PostTagOverlay = ({ primaryTag, secondaryTag, confidence, source, topTopic
                 </span>
             </div>
             {secondaryTag && (
-                <div style={{ ...baseStyle, backgroundColor: '#FFFFFF', color: '#6B6B6B', border: '1px solid #F4F4F4', transform: 'scale(0.9)' }}>
+                <div style={{ ...baseStyle, backgroundColor: '#f5f5f5', color: '#666', border: '1px solid #eee', transform: 'scale(0.9)' }}>
                     {secondaryTag}
                 </div>
             )}

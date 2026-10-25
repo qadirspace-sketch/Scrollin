@@ -1,22 +1,46 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Icon from './Icon';
+import Analytics from './Analytics';
+import HookAnalytics from './HookAnalytics';
+import TopicAnalytics from './TopicAnalytics';
+import TopicAnalyticsNarrative from './TopicAnalyticsNarrative';
+import TagFolders from './TagFolders';
 import ErrorHandler from './ErrorHandler';
 import { generateCSV, downloadCSV } from '../utils/csvExport';
 import { downloadTXT } from '../utils/txtExport';
 import { applyRuleBasedTags, getTagsForPost } from '../utils/taggingService';
 import { extractTimeFromUrn } from '../utils/timeUtils';
-import { withLift, postTime, creatorKey } from '../utils/metrics';
 
 // New Dashboard Components
-import AppSidebar, { labelForTab, initialsOf } from './AppSidebar';
-import LineIcon from './LineIcon';
-import OverviewPage from './OverviewPage';
-import PostsPage from './PostsPage';
-import SettingsPage from './SettingsPage';
-import InsightsPage from './InsightsPage';
-import CreatorsPage from './CreatorsPage';
-import StudioPage from './StudioPage';
+import DashboardSidebar from './DashboardSidebar';
+import DashboardStats from './DashboardStats';
+import DashboardFeedItem from './DashboardFeedItem';
+import RightSidebarWidgets from './RightSidebarWidgets';
+import HooksPatternPage from './HooksPatternPage';
+import PostingAnalytics from './PostingAnalytics';
+import PostingHabits from './PostingHabits';
+import Watchlist from './Watchlist';
+import CreatorIntelligence from './CreatorIntelligence';
+import IdeaRemixLab from './IdeaRemixLab';
+import FullDnaReport from './FullDnaReport';
+import TopicIntelligence from './TopicIntelligence';
 // Removed viralScoreEngine import
+
+const SurfaceDeco = () => {
+    return (
+        <svg className="surface-deco" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice" aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0, overflow: 'hidden' }}>
+            <g fill="none" stroke="var(--accent)" strokeOpacity="0.07" strokeWidth="1.5">
+                <path d="M-100 120 Q 300 -40 700 120 T 1400 120" />
+                <path d="M-100 200 Q 350 40 750 200 T 1400 200" />
+                <path d="M900 -60 Q 1100 200 950 460" />
+                <path d="M1050 -40 Q 1280 240 1080 540" />
+            </g>
+            <g fill="none" stroke="#C9CDD6" strokeOpacity="0.18" strokeWidth="1">
+                <path d="M-100 680 Q 300 560 700 700 T 1400 660" />
+            </g>
+        </svg>
+    );
+};
 
 const Sidebar = ({ isOpen, onClose }) => {
     // Core State
@@ -30,7 +54,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     const [postFilter, setPostFilter] = useState('ALL'); // 'ALL' | 'VIRAL'
 
     // View State
-    const [activeTab, setActiveTab] = useState('Overview');
+    const [activeTab, setActiveTab] = useState('Dashboard');
     const [showAnalytics, setShowAnalytics] = useState(false); // Backward/Modal compatibility
     const [showTopicAnalytics, setShowTopicAnalytics] = useState(false);
     const [showHookAnalytics, setShowHookAnalytics] = useState(false);
@@ -92,8 +116,12 @@ const Sidebar = ({ isOpen, onClose }) => {
             const likes = parseInt(post.stats?.likes || 0);
             const comments = parseInt(post.stats?.comments || 0);
             const reposts = parseInt(post.stats?.reposts || 0);
-            // Baselines are per creator, so the server needs to know whose post this is
-            return { id: post.urn || Math.random().toString(), likes, comments, reposts, createdAt: postTime(post) || 0, creatorKey: creatorKey(post) };
+            let createdAt = 0;
+            if (post.urn) {
+                const date = extractTimeFromUrn(post.urn);
+                if (date) createdAt = date.getTime();
+            }
+            return { id: post.urn || Math.random().toString(), likes, comments, reposts, createdAt };
         });
 
         if (chrome?.runtime?.sendMessage) {
@@ -388,8 +416,14 @@ const Sidebar = ({ isOpen, onClose }) => {
                 return p;
             }).filter(p => p.viralLabel === 'Highly Viral' || p.viralLabel === 'Viral');
         } else {
-            // Default: lift for every post (same rules as the server), so badges cover older posts too
-            data = withLift(data);
+            // Default: Merge 30-day scores for badges in normal feed interaction
+            data = data.map(p => {
+                const scoreData = viralData30d.get(p.urn);
+                if (scoreData) {
+                    return { ...p, ...scoreData };
+                }
+                return p;
+            });
         }
 
         // 2. Filter by Search Term
@@ -446,11 +480,6 @@ const Sidebar = ({ isOpen, onClose }) => {
             const timeB = getPostTimestamp(b);
 
             switch (sortBy) {
-                case 'best': {
-                    // Highest lift first; posts without a baseline go last
-                    const la = a.lift ?? a.performanceRatio ?? -1, lb = b.lift ?? b.performanceRatio ?? -1;
-                    return lb - la || timeB - timeA;
-                }
                 case 'oldest':
                     return timeA - timeB;
                 case 'least_commented':
@@ -614,185 +643,339 @@ const Sidebar = ({ isOpen, onClose }) => {
         window.open(`http://localhost:5001/logout?extId=${extId}`, '_blank', 'width=500,height=650,noopener');
     };
 
-    // ---- App shell state (sidebar, recents, search shortcut, scroll reset) ----
-    const [sideCollapsed, setSideCollapsed] = useState(false);
-    const [accountOpen, setAccountOpen] = useState(false);
-    const [trackedCreators, setTrackedCreators] = useState([]);
-    const [recents, setRecents] = useState(() => {
-        try { return JSON.parse(localStorage.getItem('scrollin_recents') || '[]').filter(r => ['Overview', 'Posts', 'Insights', 'Creators', 'Studio'].includes(r.tab)); } catch (e) { return []; }
-    });
-    const scrollRef = useRef(null);
-    const searchRef = useRef(null);
-    const accountRef = useRef(null);
-
-    // Shared analysis for every page: lift per post, and hook patterns from the backend (fetched once per post set)
-    const [navParams, setNavParams] = useState({});
-    const [patterns, setPatterns] = useState([]);
-    const [postTypes, setPostTypes] = useState({});
-    const scoredPosts = useMemo(() => withLift(flattenedPosts), [flattenedPosts]);
-    useEffect(() => {
-        if (!flattenedPosts.length || !chrome?.runtime?.sendMessage) { setPatterns([]); setPostTypes({}); return; }
-        const timer = setTimeout(() => {
-            chrome.runtime.sendMessage({ action: 'analyze_patterns', posts: flattenedPosts, timeframe: 'all' }, (res) => {
-                if (res && res.success) { setPatterns(res.patterns || []); setPostTypes(res.postTypes || {}); }
-            });
-        }, 400); // wait for capture bursts to settle
-        return () => clearTimeout(timer);
-    }, [flattenedPosts]);
-
-    const navigate = (tab, params = {}) => {
-        setNavParams(params);
-        setActiveTab(tab);
-        if (tab === 'Settings') return;
-        setRecents(prev => {
-            const next = [{ tab, creator: currentProfile?.name || null }, ...prev.filter(r => !(r.tab === tab && r.creator === (currentProfile?.name || null)))].slice(0, 5);
-            try { localStorage.setItem('scrollin_recents', JSON.stringify(next)); } catch (e) { /* storage unavailable */ }
-            return next;
-        });
-    };
-
-    // Every page starts at the top
-    useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [activeTab]);
-
-    // ⌘K / Ctrl+K focuses search while the panel is open
-    useEffect(() => {
-        if (!isOpen) return;
-        const onKey = (e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-                e.preventDefault();
-                setSideCollapsed(false);
-                setTimeout(() => searchRef.current && searchRef.current.focus(), 0);
-            }
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [isOpen]);
-
-    useEffect(() => {
-        if (!isAuthenticated || !chrome?.runtime?.sendMessage) return;
-        chrome.runtime.sendMessage({ action: 'get_all_watchlist_profiles' }, (res) => {
-            if (res && Array.isArray(res.profiles)) setTrackedCreators(res.profiles);
-        });
-    }, [isAuthenticated, activeTab]);
-
-    useEffect(() => {
-        if (!accountOpen) return;
-        const close = (e) => { if (accountRef.current && !accountRef.current.contains(e.target)) setAccountOpen(false); };
-        document.addEventListener('mousedown', close);
-        return () => document.removeEventListener('mousedown', close);
-    }, [accountOpen]);
-
-    const clearAllData = () => new Promise((resolve) => {
-        if (!chrome?.runtime?.sendMessage) return resolve(false);
-        chrome.runtime.sendMessage({ action: 'clear_database' }, (response) => {
-            const ok = !!(response && response.success);
-            if (ok) { setPosts([]); setFetchCount(0); }
-            resolve(ok);
-        });
-    });
-
-    const syncLabel = isFetching ? `Capturing… ${fetchCount} posts` : flattenedPosts.length ? `${flattenedPosts.length} posts captured` : 'No posts captured yet';
-    const accountName = authUser?.fullName || authUser?.firstName || authUser?.name || 'Account';
-
-    const renderPage = () => {
-        switch (activeTab) {
-            case 'Posts':
-                return <PostsPage scored={scoredPosts} postTypes={postTypes} params={navParams} searchTerm={searchTerm} onSearchChange={setSearchTerm}
-                    ownOnly={analyzeOwnContentOnly} onOwnOnlyChange={setAnalyzeOwnContentOnly} isFetching={isFetching} onExport={handleDownloadTXT} onNavigate={navigate} />;
-            case 'Insights':
-                return <InsightsPage scored={scoredPosts} postTypes={postTypes} params={navParams} onNavigate={navigate} />;
-            case 'Creators':
-                return <CreatorsPage onTrackedChange={setTrackedCreators} />;
-            case 'Studio':
-                return <StudioPage scored={scoredPosts} patterns={patterns} params={navParams} onNavigate={navigate} />;
-            case 'Settings':
-                return <SettingsPage authUser={authUser} postCount={flattenedPosts.length} onLogout={handleLogout} onExport={handleDownloadTXT} onClearData={clearAllData} />;
-            default:
-                return <OverviewPage scored={scoredPosts} patterns={patterns} postTypes={postTypes} onNavigate={navigate} onExport={handleDownloadTXT} />;
-        }
-    };
-
     return (
-        <div id="scrollin-app-panel" className={isOpen ? 'open' : ''} style={{ ...sidebarStyle, backgroundColor: '#FFFFFF' }}>
-            {isAuthenticated === null ? (
-                <div className="auth-loading-overlay">
-                    <div className="auth-loading-spinner"></div>
-                    <div className="auth-loading-text">Loading…</div>
-                </div>
-            ) : isAuthenticated === false ? (
-                <div className="auth-lock-overlay">
-                    <div className="auth-lock-card">
-                        <div className="auth-lock-icon">
-                            <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                            </svg>
-                        </div>
-                        <h2 className="auth-lock-title">Welcome to Scrollin</h2>
-                        <p className="auth-lock-subtitle">Sign in to unlock content intelligence for LinkedIn profiles.</p>
-                        <button className="auth-lock-btn" onClick={handleSignIn}>Sign in to continue</button>
-                        <p className="auth-lock-footer">Secure authentication powered by Clerk</p>
+        <div id="scrollin-app-panel" className={isOpen ? 'open' : ''} style={sidebarStyle}>
+            {/* Decorative stage blobs */}
+            <div className="stage-deco">
+                <div className="stage-glow" />
+                <div className="stage-glow-2" />
+            </div>
+
+            {/* Main Premium Frame */}
+            <div className="frame">
+                {/* Auth Screen Handling */}
+                {isAuthenticated === null ? (
+                    <div className="auth-loading-overlay">
+                        <div className="auth-loading-spinner"></div>
+                        <div className="auth-loading-text">Verifying session...</div>
                     </div>
-                    <button type="button" className="sx-ibtn" onClick={onClose} aria-label="Close Scrollin" style={{ position: 'absolute', top: 16, right: 16 }}>
-                        <LineIcon name="close" />
-                    </button>
-                </div>
-            ) : (
-                <div className="sx-app">
-                    {!sideCollapsed && (
-                        <AppSidebar
-                            activeTab={activeTab} onNavigate={navigate}
-                            creator={currentProfile ? { name: currentProfile.name, image: currentProfile.image } : null}
-                            trackedCreators={trackedCreators}
-                            counts={{ posts: flattenedPosts.length, watchlist: trackedCreators.length }}
-                            recents={recents}
-                            searchTerm={searchTerm} onSearchChange={setSearchTerm}
-                            onSearchSubmit={() => navigate('Posts')} searchRef={searchRef}
-                            isFetching={isFetching} syncLabel={syncLabel}
-                            onCollapse={() => setSideCollapsed(true)}
-                        />
-                    )}
-                    <div className="sx-main">
-                        <header className="sx-top">
-                            <div className="sx-crumb">
-                                {sideCollapsed && (
-                                    <button type="button" className="sx-ibtn" onClick={() => setSideCollapsed(false)} aria-label="Open sidebar" title="Open sidebar">
-                                        <LineIcon name="panel" />
-                                    </button>
-                                )}
-                                {currentProfile?.name && <><span className="dim">{currentProfile.name}</span><span style={{ color: '#BDBDBD' }}>/</span></>}
-                                <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{labelForTab(activeTab)}</span>
+                ) : isAuthenticated === false ? (
+                    <div className="auth-lock-overlay">
+                        <div className="auth-lock-card">
+                            <div className="auth-lock-icon">
+                                <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                                </svg>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                <button type="button" className="sx-tbtn" onClick={handleResync} disabled={isFetching} title="Capture the latest posts from this profile">
-                                    <LineIcon name="sync" size={16} style={isFetching ? { animation: 'spin 1.2s linear infinite' } : null} />
-                                    {isFetching ? 'Syncing…' : 'Sync now'}
-                                </button>
-                                <div ref={accountRef} style={{ position: 'relative' }}>
-                                    <button type="button" className="sx-ibtn" onClick={() => setAccountOpen(o => !o)} aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Account menu">
-                                        {authUser?.imageUrl
-                                            ? <img className="sx-av" src={authUser.imageUrl} alt="" style={{ width: 30, height: 30 }} />
-                                            : <span className="sx-av" style={{ width: 30, height: 30, fontSize: 12, background: '#111111', color: '#FFFFFF' }}>{initialsOf(accountName)}</span>}
-                                    </button>
-                                    {accountOpen && (
-                                        <div className="sx-menu" role="menu" style={{ top: 44, right: 0, minWidth: 220 }}>
-                                            <div style={{ padding: '8px 10px 10px', borderBottom: '1px solid #EEE', marginBottom: 6 }}>
-                                                <div style={{ fontSize: 14, fontWeight: 600 }}>{accountName}</div>
-                                            </div>
-                                            <button type="button" className="sx-mi" role="menuitem" onClick={() => { setAccountOpen(false); navigate('Settings'); }}><LineIcon name="settings" size={16} /> Settings</button>
-                                            <button type="button" className="sx-mi" role="menuitem" onClick={() => { setAccountOpen(false); handleLogout(); }}><LineIcon name="logout" size={16} /> Sign out</button>
-                                        </div>
-                                    )}
-                                </div>
-                                <div style={{ width: 1, height: 22, background: '#E5E5E5', margin: '0 6px' }} />
-                                <button type="button" className="sx-ibtn" onClick={onClose} aria-label="Close Scrollin" title="Close Scrollin">
-                                    <LineIcon name="close" />
-                                </button>
-                            </div>
-                        </header>
-                        <div className="sx-scroll" ref={scrollRef}>
-                            {renderPage()}
+                            <h2 className="auth-lock-title">Welcome to Scrollin</h2>
+                            <p className="auth-lock-subtitle">Sign in to unlock content intelligence for LinkedIn profiles.</p>
+                            <button className="auth-lock-btn" onClick={handleSignIn}>
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+                                    <polyline points="10 17 15 12 10 7"/>
+                                    <line x1="15" y1="12" x2="3" y2="12"/>
+                                </svg>
+                                Sign In to Continue
+                            </button>
+                            <p className="auth-lock-footer">Secure authentication powered by Clerk</p>
                         </div>
+                    </div>
+                ) : (
+                <>
+                {/* Left Navigation Rail */}
+                <DashboardSidebar 
+                    activeTab={activeTab} 
+                    onTabChange={setActiveTab} 
+                    profile={authUser}
+                    isFetching={isFetching}
+                    fetchCount={fetchCount}
+                    onLogout={handleLogout}
+                />
+
+                {/* Inner White Surface */}
+                <div className="surface">
+                    {/* Background lines */}
+                    <SurfaceDeco />
+
+                    {/* Top Bar Banner */}
+                    <div className="topbar">
+                        {/* Greeting */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <div className="greet">
+                                {authUser ? (
+                                    <img className="greet-av" src={authUser.imageUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(authUser.fullName)}&background=random`} alt={authUser.fullName} />
+                                ) : (
+                                    <img className="greet-av" src="https://ui-avatars.com/api/?name=User&background=random" alt="User" />
+                                )}
+                                <div>
+                                    <div className="greet-title">Hello, {authUser?.firstName || authUser?.fullName?.split(' ')[0] || 'User'} 👋</div>
+                                    <div className="greet-sub">
+                                        {activeTab === 'Dashboard' 
+                                            ? "Here's your content intelligence for today." 
+                                            : activeTab}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Fetching Progress Bar */}
+                            {(isFetching || showCompleted) && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%', minWidth: '240px', marginTop: '2px', animation: 'viewIn 0.3s ease' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', fontWeight: '600' }}>
+                                        {isFetching ? (
+                                            <span style={{ color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                                <span className="sync-pulse" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--accent)', display: 'inline-block' }} />
+                                                Syncing posts...
+                                            </span>
+                                        ) : (
+                                            <span style={{ color: '#3F8C4D', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                ✓ Fetching completed!
+                                            </span>
+                                        )}
+                                        <span style={{ color: isFetching ? 'var(--muted)' : '#3F8C4D' }}>
+                                            {fetchCount} captured
+                                        </span>
+                                    </div>
+                                    <div className="prog" style={{ height: '6px', width: '100%' }}>
+                                        <div 
+                                            className="prog-fill" 
+                                            style={{ 
+                                                width: isFetching ? `${Math.min(100, Math.max(15, (fetchCount / 20) * 100))}%` : '100%',
+                                                backgroundColor: isFetching ? 'var(--accent)' : 'var(--green)',
+                                                backgroundImage: isFetching ? 'linear-gradient(45deg, rgba(255,255,255,0.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.15) 75%, transparent 75%, transparent)' : 'none',
+                                                backgroundSize: '1rem 1rem',
+                                                animation: isFetching ? 'progress-bar-stripes 1s linear infinite' : 'none'
+                                            }} 
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Search Input */}
+                        <div className="search">
+                            <Icon name="search" size={17} color="var(--muted)" />
+                            <input 
+                                type="text"
+                                placeholder="Search posts..." 
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                            <span className="kbd">⌘F</span>
+                        </div>
+
+                        {/* Topbar Right Side Controls */}
+                        <div className="topbar-right">
+                            {/* Sort Dropdown */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ fontSize: '12.5px', color: 'var(--muted)', fontWeight: 600 }}>Sort:</span>
+                                <select
+                                    value={sortBy}
+                                    onChange={(e) => setSortBy(e.target.value)}
+                                    style={{
+                                        backgroundColor: 'var(--surface-2)',
+                                        border: 'none',
+                                        borderRadius: 'var(--r-pill)',
+                                        padding: '6px 24px 6px 12px',
+                                        fontSize: '12.5px',
+                                        fontWeight: '550',
+                                        color: 'var(--ink-2)',
+                                        cursor: 'pointer',
+                                        outline: 'none',
+                                        WebkitAppearance: 'none',
+                                        appearance: 'none',
+                                        backgroundImage: 'url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%236c757d\' stroke-width=\'2.5\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3e%3cpolyline points=\'6 9 12 15 18 9\'%3e%3c/polyline%3e%3c/svg%3e")',
+                                        backgroundRepeat: 'no-repeat',
+                                        backgroundPosition: 'right 8px center',
+                                        backgroundSize: '12px',
+                                        minWidth: '120px'
+                                    }}
+                                >
+                                    <option value="newest">Newest</option>
+                                    <option value="oldest">Oldest</option>
+                                    <option value="most_commented">Most Commented</option>
+                                    <option value="least_commented">Least Commented</option>
+                                    <option value="most_liked">Most Liked</option>
+                                    <option value="least_liked">Least Liked</option>
+                                    <option value="most_shared">Most Shared</option>
+                                    <option value="least_shared">Least Shared</option>
+                                </select>
+                            </div>
+
+                            {/* Own Content Switch */}
+                            <button 
+                                className="switch" 
+                                onClick={() => setAnalyzeOwnContentOnly(!analyzeOwnContentOnly)}
+                                style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', outline: 'none' }}
+                                title="Analyze own content only (excludes reposts)"
+                            >
+                                <span className={`switch-track ${analyzeOwnContentOnly ? 'on' : ''}`}>
+                                    <span className="switch-knob" />
+                                </span>
+                                <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-2)' }}>Own content</span>
+                            </button>
+
+                            {/* Divider */}
+                            <div style={{ width: '1px', height: '24px', backgroundColor: '#e2e8f0', margin: '0 4px' }} />
+
+                            {/* Export TXT */}
+                            <button className="icon-btn" onClick={handleDownloadTXT} title="Download Posts as TXT">
+                                <Icon name="download" size={19} color="var(--ink-2)" />
+                            </button>
+
+                            {/* Force Resync */}
+                            <button className="icon-btn" onClick={handleResync} title="Force Resync">
+                                <Icon name="refresh" size={19} color="var(--ink-2)" style={isFetching ? { animation: 'spin 1.2s linear infinite' } : null} />
+                            </button>
+
+                            {/* Clear DB */}
+                            <button className="icon-btn" onClick={handleClearDB} title="Clear Database">
+                                <Icon name="x" size={19} color="var(--red)" />
+                            </button>
+
+                            {/* Add Creators Button */}
+                            <button 
+                                className="btn btn-blue btn-sm" 
+                                onClick={() => setActiveTab('Watchlist')}
+                                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                            >
+                                <Icon name="plus" size={15} color="#FFFFFF" />
+                                Add Creators
+                            </button>
+
+                            {/* Close Button */}
+                            <button 
+                                className="icon-btn" 
+                                onClick={onClose} 
+                                title="Close Sidebar" 
+                                style={{ backgroundColor: 'var(--red-soft)', color: 'var(--red)' }}
+                            >
+                                <Icon name="x" size={16} color="var(--red)" />
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Scrollable View Area */}
+                    <div className="scroll">
+                        <div className="view">
+                            {activeTab === 'Hooks & Patterns' ? (
+                                <HooksPatternPage posts={flattenedPosts} initialParams={hooksNavParams} profileId={currentVanity} />
+                            ) : activeTab === 'Topic Intelligence' ? (
+                                <TopicIntelligence posts={flattenedPosts} profileId={currentVanity} />
+                            ) : activeTab === 'Posting Analytics' ? (
+                                <PostingAnalytics posts={flattenedPosts} profileId={currentVanity} />
+                            ) : activeTab === 'Posting Habits' ? (
+                                <PostingHabits posts={flattenedPosts} profileId={currentVanity} />
+                            ) : activeTab === 'Watchlist' ? (
+                                <Watchlist />
+                            ) : activeTab === 'Creator Intelligence' ? (
+                                <CreatorIntelligence go={setActiveTab} onNavigateToHooks={handleNavigateToHooks} />
+                            ) : activeTab === 'Idea Remix Lab' ? (
+                                <IdeaRemixLab posts={flattenedPosts} />
+                            ) : activeTab === 'Full DNA Report' ? (
+                                <FullDnaReport posts={flattenedPosts} go={setActiveTab} onNavigateToHooks={handleNavigateToHooks} />
+                            ) : (
+                                <>
+                                    {/* Stats Row */}
+                                    <DashboardStats
+                                        posts={flattenedPosts}
+                                        activeFilter={postFilter}
+                                        onClearFilter={() => setPostFilter('ALL')}
+                                        onViewViral={(timeframe) => setPostFilter(timeframe === '7d' ? 'VIRAL-7' : 'VIRAL-30')}
+                                        onNavigateToTab={setActiveTab}
+                                    />
+
+                                    {/* Content Grid */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.65fr) 1fr', gap: '18px', alignItems: 'start' }}>
+
+                                        {/* Feed Column */}
+                                        <div>
+                                            <div className="sec-head">
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <span className="sec-title">
+                                                        {postFilter.startsWith('VIRAL')
+                                                            ? `Viral Posts (Last ${postFilter === 'VIRAL-7' ? '7' : '30'} Days)`
+                                                            : 'Post Capture Feed'}
+                                                    </span>
+                                                    {postFilter.startsWith('VIRAL') && (
+                                                        <button
+                                                            onClick={() => setPostFilter('ALL')}
+                                                            className="pill pill-red"
+                                                            style={{ cursor: 'pointer' }}
+                                                        >
+                                                            <Icon name="x" size={12} /> Clear Filter
+                                                        </button>
+                                                    )}
+                                                </div>
+                                                <button className="see-all" onClick={() => setActiveTab('Posting Analytics')}>
+                                                    See all <Icon name="chevR" size={13} />
+                                                </button>
+                                            </div>
+
+                                            {/* Feed Items */}
+                                            {displayPosts.length > 0 ? (
+                                                <div className="col">
+                                                    {displayPosts.slice(0, visibleCount).map((post, index) => (
+                                                        <DashboardFeedItem key={index} post={post} index={index} searchTerm={searchTerm} />
+                                                    ))}
+
+                                                    {/* Load More Trigger */}
+                                                    {visibleCount < displayPosts.length && (
+                                                        <button
+                                                            onClick={handleLoadMore}
+                                                            className="btn btn-blue btn-sm"
+                                                            style={{ width: '100%', marginTop: '16px' }}
+                                                        >
+                                                            Load More Posts ({displayPosts.length - visibleCount} remaining)
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <div className="empty card">
+                                                    <div className="empty-ic"><Icon name="doc" size={26} /></div>
+                                                    {isFetching ? (
+                                                        <>
+                                                            <div style={{ fontWeight: '600', fontSize: '14px', color: 'var(--ink)' }}>Syncing with LinkedIn...</div>
+                                                            <div style={{ fontSize: '12.5px', marginTop: '4px' }}>Please scroll your feed to capture posts.</div>
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <div style={{ fontWeight: '600', fontSize: '14px', color: 'var(--ink)' }}>No posts captured yet</div>
+                                                            <div style={{ fontSize: '12.5px', marginTop: '4px' }}>Visit a profile and scroll or click Sync.</div>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Widgets Column */}
+                                        <div className="col">
+                                            <RightSidebarWidgets posts={flattenedPosts} onNavigateToHooks={handleNavigateToHooks} />
+                                        </div>
+
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Footer / Copyright */}
+                    <div style={{ margin: '20px 0 16px', textAlign: 'center', fontSize: '11.5px', color: 'var(--muted)' }}>
+                        Scrollin Beta v2.0 • LinkedIn Intelligence Suite
+                    </div>
+                </div>
+                </>
+                )}
+            </div>
+
+            {/* Legacy Modals (Hidden by default) */}
+            {showAnalytics && (
+                <div className="analytics-overlay">
+                    <div className="analytics-modal">
+                        <div style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 100 }}>
+                            <button onClick={() => setShowAnalytics(false)} className="close-analytics"><Icon name="x" size={24} /></button>
+                        </div>
+                        <Analytics posts={flattenedPosts} />
                     </div>
                 </div>
             )}

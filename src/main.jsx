@@ -22,7 +22,7 @@ Object.assign(toggleBtn.style, {
     left: '24px',
     width: '56px',
     height: '56px',
-    backgroundColor: '#111111',
+    backgroundColor: '#101010',
     color: '#FFFFFF',
     borderRadius: '50%',
     display: 'flex',

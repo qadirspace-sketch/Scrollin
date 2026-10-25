@@ -22,7 +22,7 @@ class ErrorHandler extends React.Component {
                     <p style={{ margin: 0, fontSize: '13px' }}>{this.state.error?.message || 'Unknown error'}</p>
                     <button
                         onClick={() => this.setState({ hasError: false })}
-                        style={{ marginTop: '10px', padding: '6px 12px', border: 'none', borderRadius: '4px', background: '#FFFFFF', cursor: 'pointer' }}
+                        style={{ marginTop: '10px', padding: '6px 12px', border: 'none', borderRadius: '4px', background: '#fff', cursor: 'pointer' }}
                     >
                         Try Again
                     </button>

@@ -4,7 +4,7 @@
  * Combines rule-based logic and AI embeddings (future).
  */
 
-import { extractTimeFromUrn } from './timeUtils.js';
+import { extractTimeFromUrn } from './timeUtils';
 
 const TAGS = [
     "Career Advice",
@@ -35,7 +35,7 @@ const TAGS = [
     "General"
 ];
 
-const RAW_RULES = {
+const RULES = {
     "Career Advice": [/career/i, /interview/i, /resume/i, /job search/i, /advice/i, /salary/i, /negotiation/i, /\boffer/i, /promotion/i],
     "Personal Story": [/i remember/i, /years ago/i, /my journey/i, /personal/i, /vulnerable/i, /lesson learned/i, /childhood/i, /grateful/i, /life lesson/i],
     "Opinion / Take": [/unpopular opinion/i, /hot take/i, /believe/i, /\bagree/i, /disagree/i, /thoughts\?/i, /perspective/i, /truth is/i, /my take/i],
@@ -62,21 +62,6 @@ const RAW_RULES = {
     "Life Story": [/family/i, /husband/i, /wife/i, /kids/i, /baby/i, /\bmarriage\b/i, /parents/i, /growing up/i, /memories/i, /nostalgia/i, /home/i, /relationship/i, /struggle/i, /sibling/i],
     "Health & Wellness": [/health/i, /fitness/i, /gym/i, /workout/i, /nutrition/i, /diet/i, /sleep/i, /exercise/i, /biohack/i, /running/i, /marathon/i]
 };
-
-// Whole-word matching: /rest/ used to fire on "interest", /reach/ on "reached".
-// Each plain keyword becomes \bkeyword(s|es|ed|ing|er|ers|ship)?\b; keywords too generic to signal a topic are dropped.
-const GENERIC_KEYWORDS = new Set(['rest', 'reach', 'content', 'system', 'home', 'focus', 'team', 'goal', 'apply', 'service', 'scale']);
-const toWholeWord = (re) => {
-    const src = re.source;
-    if (GENERIC_KEYWORDS.has(src)) return null;
-    if (src.includes('\\b')) return re;
-    const start = /^\w/.test(src) ? '\\b' : '';
-    const end = /\w$/.test(src) ? '(?:s|es|ed|ing|er|ers|ship)?\\b' : '';
-    return new RegExp(`${start}(?:${src})${end}`, re.flags);
-};
-const RULES = Object.fromEntries(
-    Object.entries(RAW_RULES).map(([tag, patterns]) => [tag, patterns.map(toWholeWord).filter(Boolean)])
-);
 
 // Placeholder for Cloudflare Worker URL. User needs to replace this.
 const CF_WORKER_URL = "https://linkedin-post-tagger-worker.iamabdulsamad2-0.workers.dev";

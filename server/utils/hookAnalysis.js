@@ -1,30 +1,18 @@
 const { extractTimeFromUrn } = require('./timeUtils');
-const { WEIGHTS, MIN_BASELINE_POSTS } = require('./viralScoreEngine');
 
 // --- CONSTANTS ---
 const MIN_HOURS = 1;
 const MAX_VIRAL_WINDOW_HOURS = 72;
 const MIN_ENGAGEMENT_THRESHOLD = 5;
 const MIN_AGE_HOURS = 2;
-const MIN_PATTERN_POSTS = 3; // a pattern needs this many posts before it gets a lift verdict or badge
-
-const median = (values) => {
-    const xs = values.filter(Number.isFinite).sort((a, b) => a - b);
-    if (xs.length === 0) return null;
-    const mid = Math.floor(xs.length / 2);
-    return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
-};
-
-const creatorKeyOf = (post) => post.creatorKey || post.profileUrn || post.creatorName || 'unknown';
 
 const calculateEngagementMetrics = (post) => {
     const stats = post.stats || {};
-    const likes = Number(stats.likes) || 0;
-    const comments = Number(stats.comments) || 0;
-    const shares = Number(stats.reposts) || 0;
+    const likes = stats.likes || 0;
+    const comments = stats.comments || 0;
+    const shares = stats.reposts || 0;
 
-    // Same score as src/utils/metrics.js and viralScoreEngine.js
-    const totalEngagement = likes * WEIGHTS.likes + comments * WEIGHTS.comments + shares * WEIGHTS.reposts;
+    const totalEngagement = likes + (comments * 2) + (shares * 3);
 
     let hoursSincePublished = MIN_HOURS;
     let rawAgeHours = MIN_HOURS;
@@ -251,25 +239,8 @@ const analyzePatterns = (posts, timeframe = 'short_term') => {
 
     const viablePosts = filterViablePosts(enrichedPosts, timeframe);
 
-    // Analyze the most recent 200 posts. (Sorting by velocity favoured posts that were only hours old.)
-    const byNewest = (a, b) => (b.metrics.publishedDate?.getTime() || 0) - (a.metrics.publishedDate?.getTime() || 0);
-    const topPosts = [...viablePosts].sort(byNewest).slice(0, 200);
-
-    // Per-creator median baseline → lift for each post (null without MIN_BASELINE_POSTS posts)
-    const scoresByCreator = new Map();
-    topPosts.forEach(p => {
-        const k = creatorKeyOf(p);
-        if (!scoresByCreator.has(k)) scoresByCreator.set(k, []);
-        scoresByCreator.get(k).push(p.metrics.totalEngagement);
-    });
-    const baselineByCreator = new Map();
-    scoresByCreator.forEach((scores, k) => {
-        if (scores.length >= MIN_BASELINE_POSTS) baselineByCreator.set(k, median(scores));
-    });
-    topPosts.forEach(p => {
-        const base = baselineByCreator.get(creatorKeyOf(p));
-        p.metrics.lift = base > 0 ? p.metrics.totalEngagement / base : null;
-    });
+    const sortedPosts = [...viablePosts].sort((a, b) => b.metrics.normalizedVelocity - a.metrics.normalizedVelocity);
+    const topPosts = sortedPosts.slice(0, 200);
 
     const analyzedPosts = topPosts.map(post => {
         const text = post.text || "";
@@ -344,35 +315,26 @@ const analyzePatterns = (posts, timeframe = 'short_term') => {
 
         const displayFingerprint = `${group.fingerprint} | ${traitLabels.join(' | ')}`;
 
-        const lifts = group.posts.map(p => p.metrics.lift).filter(l => l !== null);
         return {
             ...group,
             displayFingerprint,
             avgVelocity: group.totalVelocity / group.count,
-            medianEngagement: median(group.posts.map(p => p.metrics.totalEngagement)),
-            medianLift: lifts.length ? median(lifts) : null,
-            hasEnoughData: group.count >= MIN_PATTERN_POSTS && lifts.length >= MIN_PATTERN_POSTS
+            avgEngagement: group.totalEngagement / group.count
         };
     });
 
-    // Patterns with enough posts ranked by median lift first; the rest follow by how often they're used
-    patterns.sort((a, b) => {
-        if (a.hasEnoughData !== b.hasEnoughData) return a.hasEnoughData ? -1 : 1;
-        if (a.hasEnoughData) return b.medianLift - a.medianLift;
-        return b.count - a.count;
-    });
-    const byUsage = [...patterns].sort((a, b) => b.count - a.count);
+    patterns.sort((a, b) => b.totalVelocity - a.totalVelocity);
 
     const totalAnalyzed = topPosts.length;
     let creatorType = 'Varied / Testing';
     let consistencyScore = 0;
 
     if (totalAnalyzed >= 15 && patterns.length > 0) {
-        const top3Patterns = byUsage.slice(0, 3);
+        const top3Patterns = patterns.slice(0, 3);
         const top3Count = top3Patterns.reduce((sum, p) => sum + p.count, 0);
         const playbookScore = top3Count / totalAnalyzed;
 
-        const top1Count = byUsage[0].count;
+        const top1Count = patterns[0].count;
         const signatureScore = top1Count / totalAnalyzed;
 
         if (playbookScore >= 0.40) {
@@ -388,25 +350,27 @@ const analyzePatterns = (posts, timeframe = 'short_term') => {
 
     const top5Patterns = patterns.slice(0, 5);
 
+    const globalTotalEng = top5Patterns.reduce((sum, p) => sum + p.avgEngagement, 0);
+    const globalAvgEngagement = top5Patterns.length > 0 ? (globalTotalEng / top5Patterns.length) : 0;
+
     const top5PatternsWithBadges = top5Patterns.map(pattern => {
-        const bestPost = [...pattern.posts].sort((a, b) => b.metrics.totalEngagement - a.metrics.totalEngagement)[0];
+        const bestPost = pattern.posts.sort((a, b) => b.metrics.normalizedVelocity - a.metrics.normalizedVelocity)[0];
         const template = generateTemplate(bestPost.text, bestPost.analysis);
 
         const badges = [];
-        // Lift vs the creator's median (1.0 = typical post); null until the pattern has enough posts
-        const efficiencyScore = pattern.hasEnoughData ? pattern.medianLift : null;
+        const efficiencyScore = globalAvgEngagement > 0 ? (pattern.avgEngagement / globalAvgEngagement) : 1.0;
         const frequency = (pattern.count / topPosts.length) * 100;
 
-        if (efficiencyScore !== null) {
-            if (efficiencyScore >= 1.2 && frequency < 20) {
-                badges.push({ text: 'Hidden Gem', icon: 'Gem', color: '#a855f7', bg: '#f3e8ff', tooltip: `${efficiencyScore.toFixed(1)}× the median, used in only ${frequency.toFixed(0)}% of posts. Scale this up.` });
-            }
-            if (efficiencyScore >= 2) {
-                badges.push({ text: 'Viral Potential', icon: 'Zap', color: '#eab308', bg: '#fef9c3', tooltip: `${efficiencyScore.toFixed(1)}× the median engagement.` });
-            }
-            if (frequency >= 20 && efficiencyScore >= 0.8) {
-                badges.push({ text: 'Reliable Staple', icon: 'ShieldCheck', color: '#15803d', bg: '#dcfce7', tooltip: `Used in ${frequency.toFixed(0)}% of posts at ${efficiencyScore.toFixed(1)}× the median.` });
-            }
+        if (efficiencyScore >= 1.2 && frequency < 20) {
+            badges.push({ text: 'Hidden Gem', icon: 'Gem', color: '#a855f7', bg: '#f3e8ff', tooltip: 'High engagement with fewer posts. Scale this up!' });
+        }
+
+        if (efficiencyScore >= 1.5) {
+            badges.push({ text: 'Viral Potential', icon: 'Zap', color: '#eab308', bg: '#fef9c3', tooltip: 'Exceptional engagement rate.' });
+        }
+
+        if (frequency >= 20 && efficiencyScore >= 0.8) {
+            badges.push({ text: 'Reliable Staple', icon: 'ShieldCheck', color: '#15803d', bg: '#dcfce7', tooltip: 'Consistent performance at high volume.' });
         }
 
         return {
@@ -415,14 +379,11 @@ const analyzePatterns = (posts, timeframe = 'short_term') => {
             displayFingerprint: pattern.displayFingerprint,
             stats: {
                 avgVelocity: pattern.avgVelocity.toFixed(2),
-                // Median engagement score (likes + 3×comments + 4×reposts); key kept for client compatibility
-                avgEngagement: (pattern.medianEngagement || 0).toFixed(0),
-                medianLift: pattern.medianLift === null ? null : pattern.medianLift.toFixed(2),
-                hasEnoughData: pattern.hasEnoughData,
+                avgEngagement: pattern.avgEngagement.toFixed(0),
                 totalVelocity: pattern.totalVelocity.toFixed(2),
                 count: pattern.count,
                 frequency: frequency.toFixed(1),
-                efficiencyScore: efficiencyScore === null ? null : efficiencyScore.toFixed(2),
+                efficiencyScore: efficiencyScore.toFixed(2),
                 posts: pattern.posts
             },
             badges,
@@ -437,8 +398,6 @@ const analyzePatterns = (posts, timeframe = 'short_term') => {
 
     return {
         patterns: top5PatternsWithBadges,
-        // Hook type + format for every analyzed post, so the client can explain any single post
-        postTypes: Object.fromEntries(analyzedPosts.filter(p => p.urn).map(p => [p.urn, { hook: p.analysis.hook.types[0] || 'Other', format: p.analysis.format.formatType }])),
         meta: {
             creatorType,
             consistencyScore: consistencyScore.toFixed(2),

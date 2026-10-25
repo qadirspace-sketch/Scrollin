@@ -10,6 +10,7 @@ const { calculateViralPosts } = require('./utils/viralScoreEngine');
 const { analyzePatterns } = require('./utils/hookAnalysis');
 
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { Groq } = require("groq-sdk");
 
 // ANSI color logger utility
 const log = {
@@ -22,9 +23,13 @@ const log = {
     server: (msg) => console.log(`\x1b[90m[${new Date().toLocaleTimeString()}]\x1b[0m \x1b[37m[SERVER]\x1b[0m ${msg}`)
 };
 
-// Initialize Gemini AI engine
+// Initialize Gemini and Groq AI engines
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 const geminiModel = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
+const groqClient = new Groq({
+    apiKey: process.env.GROQ_API_KEY || ""
+});
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -1001,7 +1006,7 @@ app.post('/v1/analyze-patterns', requireAuth, (req, res) => {
         if (result.patterns && result.patterns.length > 0) {
             log.info(`[Analytics] analyze-patterns - Top Pattern: "${result.patterns[0].name}" (Usage: ${result.patterns[0].stats?.frequency}%)`);
         }
-        res.json({ success: true, patterns: result.patterns, meta: result.meta, postTypes: result.postTypes });
+        res.json({ success: true, patterns: result.patterns, meta: result.meta });
     } catch (e) {
         log.error("[Analytics] Analyze Patterns Error:", e);
         res.status(500).json({ success: false, error: e.message });
@@ -1130,11 +1135,8 @@ app.post('/v1/ai/posting-habits', requireAuth, async (req, res) => {
             if (!data) continue;
             combinedContext += `
 [DATA FOR ${range.toUpperCase()}]
-- Most active day (by number of posts): ${data.bestDay} (${data.bestDayEng} posts)
-- Most active hour (by number of posts): ${data.bestHour} (${data.bestHourEng} posts) [${data.timeZone || "viewer local time"}]
-- Best performing day (median vs creator median, 3+ posts): ${data.topDay ? `${data.topDay.name} (${data.topDay.lift.toFixed(1)}x median, ${data.topDay.n} posts)` : "not enough data — do not recommend a day"}
-- Best performing time slot: ${data.topTime ? `${data.topTime.name} (${data.topTime.lift.toFixed(1)}x median, ${data.topTime.n} posts)` : "not enough data — do not recommend a time"}
-- Posts in range: ${data.postsInRange ?? "n/a"}
+- Best Day: ${data.bestDay} (+${data.bestDayEng}% engagement)
+- Peak Eng. Time: ${data.bestHour} (+${data.bestHourEng}%)
 - Avg Frequency: ${data.avgFrequency}/week (Trend: ${data.freqGrowth}%)
 `;
         }
@@ -1201,7 +1203,7 @@ app.post('/v1/ai/posting-analytics', requireAuth, async (req, res) => {
 - Total ${data.activeMetric}: ${data.currentTotalMetric} (Previous: ${data.prevTotalMetric})
 - ${data.activeMetric} Growth: ${metricGrowth.toFixed(1)}%
 - Total Posts: ${data.currentTotalPosts} (Previous: ${data.prevTotalPosts})
-- Median engagement score per post (likes + 3x comments + 4x reposts): ${data.currentMedianScore ?? "n/a"} (Previous: ${data.prevMedianScore ?? "n/a"})${data.hasEnoughData ? "" : " — too few posts to compare periods; do not claim a trend"}
+- Avg Engagement Rate: ${data.currentAvgEngRate.toFixed(2)}% (Previous: ${data.prevAvgEngRate.toFixed(2)}%)
 `;
         }
 
@@ -1247,6 +1249,163 @@ app.post('/v1/ai/posting-analytics', requireAuth, async (req, res) => {
     } catch (err) {
         log.error(`Posting Analytics failed:`, err);
         res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.post('/v1/ai/remix-ideas', requireAuth, async (req, res) => {
+    const { pattern, topic } = req.body;
+    log.info(`[AI] POST /v1/ai/remix-ideas - Base Pattern: "${pattern}" | Topic: "${topic}"`);
+    if (!pattern || !topic) {
+        log.warn(`[AI] Remix Ideas - Missing pattern or topic.`);
+        return res.status(400).json({ success: false, error: "Missing pattern or topic" });
+    }
+
+    try {
+        const prompt = `
+        You are a Viral Copywriting Coach.
+        The user wants to write a LinkedIn post.
+        - Base Hook Pattern: "${pattern}"
+        - Target Topic: "${topic}"
+
+        Generate 3 distinct, high-converting LinkedIn post hook ideas (first 2-3 lines of a post) that apply the "${pattern}" structure to the topic "${topic}".
+        Make them extremely engaging, using pattern-interrupts, contrarian openings, or clear value propositions.
+        
+        Output ONLY a JSON array of 3 strings. Example:
+        [
+            "Hook draft 1...",
+            "Hook draft 2...",
+            "Hook draft 3..."
+        ]
+
+        Constraint: Output ONLY valid JSON array. No markdown, no backticks, no comments.
+        `;
+
+        log.ai(`Calling Gemini for Remix Ideas...`);
+        const result = await geminiModel.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        const cleanText = text.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
+        const jsonResponse = JSON.parse(cleanText);
+
+        log.success(`Remix Ideas generated successfully.`);
+        res.json({ success: true, data: jsonResponse });
+    } catch (err) {
+        log.error(`Remix Ideas failed:`, err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.post('/v1/ai/polish-template', requireAuth, async (req, res) => {
+    const { templateObject } = req.body;
+    log.info(`[AI] POST /v1/ai/polish-template - Polishing template structure...`);
+    if (!templateObject) {
+        log.warn(`[AI] Polish Template - Missing templateObject.`);
+        return res.status(400).json({ success: false, error: "Missing templateObject" });
+    }
+
+    const SYSTEM_PROMPT = `You are a deterministic post-structure analyzer.
+
+You do NOT:
+- invent ideas
+- rewrite content
+- improve writing
+- add strategy
+- generalize beyond structure
+
+You ONLY:
+- identify structural components
+- label hook and section types
+- explain structural roles
+- convert structure into a reusable, topic-agnostic template
+
+If a structural element is unclear, label it as "UNSPECIFIED".
+
+Your output must be factual, repeatable, and based only on the provided text.
+`;
+
+    const userPrompt = `
+Analyze the following post and do the tasks below.
+
+TASKS:
+
+1. Identify the HOOK
+   - Classify the hook type (e.g. Question, Hypothetical, Opinion, Authority, Challenge)
+   - Identify how many lines the hook uses
+   - Explain what the hook is doing structurally (not what it says)
+
+2. Identify the MAIN BODY STRUCTURE
+   - Paragraphs vs Lists
+   - Numbered sections
+   - Any "Bonus" or secondary section
+   - Explain why this structure works mechanically
+
+3. Identify the CTA (Call To Action)
+   - Type (Question, Feedback request, Engagement prompt, Soft CTA)
+   - Placement (end, mid, etc.)
+
+4. Convert this post into a REUSABLE, TOPIC-AGNOSTIC TEMPLATE
+   - Do NOT mention the original topic
+   - Do NOT include examples
+   - Write each section as an instruction
+   - Keep it reusable for any niche or industry
+
+5. Output the final template in a clean, copy-paste format.
+
+IMPORTANT RULES:
+- Do NOT invent content
+- Do NOT rewrite the post
+- Do NOT add marketing advice
+- Do NOT claim performance guarantees
+- Focus on structure only
+
+
+Input JSON:
+${JSON.stringify(templateObject, null, 2)}
+`;
+
+    let text = '';
+    try {
+        log.ai(`Calling Groq/Llama-3 for Template Polish...`);
+        const chatCompletion = await groqClient.chat.completions.create({
+            "messages": [
+                { "role": "system", "content": SYSTEM_PROMPT },
+                { "role": "user", "content": userPrompt }
+            ],
+            "model": "llama-3.1-8b-instant",
+            "temperature": 1,
+            "max_completion_tokens": 1024,
+            "top_p": 1,
+            "stream": false
+        });
+
+        text = chatCompletion.choices[0]?.message?.content || '';
+        
+        let jsonString = text;
+        const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (jsonMatch) jsonString = jsonMatch[1];
+
+        // cleanup comments and trailing commas
+        jsonString = jsonString.replace(/\/\/.*$/gm, '');
+        jsonString = jsonString.replace(/\/\*[\s\S]*?\*\//g, '');
+        jsonString = jsonString.replace(/,(\s*[}\]])/g, '$1');
+
+        const parsed = JSON.parse(jsonString);
+
+        log.success(`Template Polishing generated successfully.`);
+        res.json({ success: true, data: parsed });
+    } catch (err) {
+        log.warn(`Groq Parsing Failed, falling back to text mode: ${err.message}`);
+        // Fallback to text template output (using the generated LLM text if available)
+        res.json({
+            success: true,
+            data: {
+                ...templateObject,
+                schemaName: "AI Analysis",
+                template: text || `Failed to generate template structure. Error: ${err.message}`,
+                isPolished: true
+            }
+        });
     }
 });
 

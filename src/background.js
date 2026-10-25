@@ -851,6 +851,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             .then(data => sendResponse(data))
             .catch(err => sendResponse({ success: false, error: err.message }));
         return true;
+    } else if (request.action === "generate_remix_ideas") {
+         fetchWithAuth(`${BACKEND_API}/v1/ai/remix-ideas`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pattern: request.pattern, topic: request.topic })
+        })
+            .then(res => res.json())
+            .then(data => sendResponse(data))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    } else if (request.action === "polish_template_with_llm") {
+         fetchWithAuth(`${BACKEND_API}/v1/ai/polish-template`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ templateObject: request.templateObject })
+        })
+            .then(res => res.json())
+            .then(data => sendResponse(data))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
     } else if (request.action === 'start_profile_update') {
         const profileUrls = request.profiles || [];
         if (profileUrls.length > 0) startProfileUpdates(profileUrls);

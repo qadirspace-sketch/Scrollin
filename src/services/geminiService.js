@@ -56,3 +56,22 @@ export async function generatePostingAnalyticsSummary(payloads) {
         });
     });
 }
+
+export async function generateRemixIdeas(pattern, topic) {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+            action: "generate_remix_ideas",
+            pattern,
+            topic
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                return reject(chrome.runtime.lastError);
+            }
+            if (response && response.success) {
+                resolve(response.data);
+            } else {
+                reject(new Error(response?.error || "Failed to generate remix ideas"));
+            }
+        });
+    });
+}
